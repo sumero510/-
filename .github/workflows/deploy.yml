@@ -37,9 +37,13 @@ jobs:
       - name: GitHub Pages 用にビルド
         run: npm run build
         env:
+          # 静的エクスポートモードを有効化（GitHub Pages 専用）
+          STATIC_EXPORT: "true"
+          NEXT_PUBLIC_IS_STATIC: "true"
           # リポジトリ名が「-」の場合: https://<user>.github.io/-/
           NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
           # Anthropic API キー（リポジトリの Settings > Secrets > Actions で設定）
+          # ⚠️ NEXT_PUBLIC_ のため静的 HTML に含まれます。個人利用・デモ用途向けです
           NEXT_PUBLIC_ANTHROPIC_API_KEY: ${{ secrets.NEXT_PUBLIC_ANTHROPIC_API_KEY }}
 
       - name: GitHub Pages アーティファクトをアップロード

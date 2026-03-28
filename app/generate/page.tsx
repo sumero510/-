@@ -8,6 +8,10 @@ import { saveMealPlan, generateId } from '@/lib/storage'
 import { buildSystemPrompt, buildUserPrompt } from '@/lib/prompt'
 import MealPlanDisplay from '@/components/MealPlanDisplay'
 
+// ビルド時に決定される定数
+// GitHub Pages ビルド時のみ NEXT_PUBLIC_IS_STATIC=true がセットされる
+const IS_STATIC = process.env.NEXT_PUBLIC_IS_STATIC === 'true'
+
 function GenerateContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -36,75 +40,95 @@ function GenerateContent() {
   useEffect(() => {
     if (hasFetched.current) return
     hasFetched.current = true
-
-    const fetchMealPlan = async () => {
-      const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY
-      if (!apiKey) {
-        setError('APIキーが設定されていません。環境変数 NEXT_PUBLIC_ANTHROPIC_API_KEY を確認してください。')
-        setLoading(false)
-        return
-      }
-
-      try {
-        // GitHub Pages (static export) では API Route が使えないため、
-        // ブラウザから Anthropic SDK を直接呼び出します
-        const client = new Anthropic({
-          apiKey,
-          dangerouslyAllowBrowser: true,
-        })
-
-        const stream = client.messages.stream({
-          model: 'claude-opus-4-6',
-          max_tokens: 8000,
-          system: buildSystemPrompt(),
-          messages: [{ role: 'user', content: buildUserPrompt(userInput) }],
-        })
-
-        let fullContent = ''
-        for await (const event of stream) {
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            fullContent += event.delta.text
-            setContent(fullContent)
-          }
-        }
-
-        // Parse JSON from the streamed content
-        try {
-          const jsonMatch = fullContent.match(/\{[\s\S]*\}/)
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0])
-            const plan: MealPlan = {
-              id: generateId(),
-              saveName: userInput.saveName || `${new Date().getFullYear()}年献立`,
-              createdAt: new Date().toISOString(),
-              numPeople: userInput.numPeople || '3人',
-              budget: userInput.budget || '25,000円',
-              theme: userInput.priority || '節約重視',
-              summary: parsed.summary ?? {},
-              weeklyMenu: parsed.weeklyMenu ?? [],
-              dailyDetails: parsed.dailyDetails ?? [],
-              shoppingList: parsed.shoppingList ?? {},
-              budgetSummary: parsed.budgetSummary ?? {},
-              rawContent: fullContent,
-            }
-            setMealPlan(plan)
-          }
-        } catch {
-          // If JSON parsing fails, still show the raw content
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '献立の生成に失敗しました')
-      } finally {
-        setLoading(false)
-      }
-    }
-
     fetchMealPlan()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ----- Vercel / 通常サーバー: API Route 経由（APIキーはサーバー側に秘匿）-----
+  const fetchViaApiRoute = async () => {
+    const response = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userInput }),
+    })
+    if (!response.ok || !response.body) {
+      throw new Error(`サーバーエラー: ${response.status}`)
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let fullContent = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      fullContent += decoder.decode(value, { stream: true })
+      setContent(fullContent)
+    }
+    return fullContent
+  }
+
+  // ----- GitHub Pages / 静的エクスポート: ブラウザから SDK 直接呼び出し -----
+  const fetchViaClientSdk = async () => {
+    const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY
+    if (!apiKey) {
+      throw new Error(
+        'APIキーが設定されていません。\n' +
+        'GitHub Pages の場合: リポジトリの Settings > Secrets > Actions に\n' +
+        'NEXT_PUBLIC_ANTHROPIC_API_KEY を追加してください。'
+      )
+    }
+    const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
+    const stream = client.messages.stream({
+      model: 'claude-opus-4-6',
+      max_tokens: 8000,
+      system: buildSystemPrompt(),
+      messages: [{ role: 'user', content: buildUserPrompt(userInput) }],
+    })
+    let fullContent = ''
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        fullContent += event.delta.text
+        setContent(fullContent)
+      }
+    }
+    return fullContent
+  }
+
+  const fetchMealPlan = async () => {
+    try {
+      // IS_STATIC=true (GitHub Pages ビルド) はクライアント SDK、
+      // それ以外 (Vercel 等) は API Route を使用
+      const fullContent = IS_STATIC
+        ? await fetchViaClientSdk()
+        : await fetchViaApiRoute()
+
+      try {
+        const jsonMatch = fullContent.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0])
+          setMealPlan({
+            id: generateId(),
+            saveName: userInput.saveName || `${new Date().getFullYear()}年献立`,
+            createdAt: new Date().toISOString(),
+            numPeople: userInput.numPeople || '3人',
+            budget: userInput.budget || '25,000円',
+            theme: userInput.priority || '節約重視',
+            summary: parsed.summary ?? {},
+            weeklyMenu: parsed.weeklyMenu ?? [],
+            dailyDetails: parsed.dailyDetails ?? [],
+            shoppingList: parsed.shoppingList ?? {},
+            budgetSummary: parsed.budgetSummary ?? {},
+            rawContent: fullContent,
+          })
+        }
+      } catch {
+        // JSON パース失敗時はローコンテンツをそのまま表示
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '献立の生成に失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleSave = () => {
     if (!mealPlan) return
@@ -113,9 +137,7 @@ function GenerateContent() {
   }
 
   const handleViewHistory = () => {
-    if (mealPlan) {
-      saveMealPlan(mealPlan)
-    }
+    if (mealPlan) saveMealPlan(mealPlan)
     router.push('/history')
   }
 
@@ -124,7 +146,7 @@ function GenerateContent() {
       <div className="text-center py-12">
         <div className="text-5xl mb-4">😢</div>
         <h2 className="text-xl font-bold text-red-600 mb-2">エラーが発生しました</h2>
-        <p className="text-gray-600 mb-6">{error}</p>
+        <p className="text-gray-600 mb-6 whitespace-pre-line">{error}</p>
         <button
           onClick={() => router.push('/')}
           className="bg-orange-500 text-white px-6 py-2 rounded-lg hover:bg-orange-600"
@@ -137,7 +159,6 @@ function GenerateContent() {
 
   return (
     <div>
-      {/* Action bar */}
       <div className="flex justify-between items-center mb-6 no-print">
         <button
           onClick={() => router.push('/')}
@@ -194,9 +215,7 @@ function GenerateContent() {
         </div>
       )}
 
-      {!loading && mealPlan && (
-        <MealPlanDisplay plan={mealPlan} />
-      )}
+      {!loading && mealPlan && <MealPlanDisplay plan={mealPlan} />}
 
       {!loading && !mealPlan && content && (
         <div className="bg-white rounded-2xl shadow-md p-8">

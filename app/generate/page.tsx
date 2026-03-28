@@ -1,9 +1,11 @@
 'use client'
 
+import Anthropic from '@anthropic-ai/sdk'
 import { useEffect, useRef, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { UserInput, MealPlan } from '@/lib/types'
 import { saveMealPlan, generateId } from '@/lib/storage'
+import { buildSystemPrompt, buildUserPrompt } from '@/lib/prompt'
 import MealPlanDisplay from '@/components/MealPlanDisplay'
 
 function GenerateContent() {
@@ -36,27 +38,37 @@ function GenerateContent() {
     hasFetched.current = true
 
     const fetchMealPlan = async () => {
+      const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY
+      if (!apiKey) {
+        setError('APIキーが設定されていません。環境変数 NEXT_PUBLIC_ANTHROPIC_API_KEY を確認してください。')
+        setLoading(false)
+        return
+      }
+
       try {
-        const response = await fetch('/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userInput }),
+        // GitHub Pages (static export) では API Route が使えないため、
+        // ブラウザから Anthropic SDK を直接呼び出します
+        const client = new Anthropic({
+          apiKey,
+          dangerouslyAllowBrowser: true,
         })
 
-        if (!response.ok || !response.body) {
-          throw new Error('API request failed')
-        }
+        const stream = client.messages.stream({
+          model: 'claude-opus-4-6',
+          max_tokens: 8000,
+          system: buildSystemPrompt(),
+          messages: [{ role: 'user', content: buildUserPrompt(userInput) }],
+        })
 
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
         let fullContent = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          const chunk = decoder.decode(value, { stream: true })
-          fullContent += chunk
-          setContent(fullContent)
+        for await (const event of stream) {
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'text_delta'
+          ) {
+            fullContent += event.delta.text
+            setContent(fullContent)
+          }
         }
 
         // Parse JSON from the streamed content

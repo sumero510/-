@@ -1,36 +1,83 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useState, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { MealPlan } from '@/lib/types'
-import { getAllMealPlans, deleteMealPlan } from '@/lib/storage'
+import { getAllMealPlans, deleteMealPlan, getMealPlanById } from '@/lib/storage'
+import MealPlanDisplay from '@/components/MealPlanDisplay'
 
-export default function HistoryPage() {
-  const [plans, setPlans] = useState<MealPlan[]>([])
+function HistoryContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const id = searchParams.get('id')
+
+  const [plans, setPlans] = useState<MealPlan[]>([])
+  const [detail, setDetail] = useState<MealPlan | null>(null)
 
   useEffect(() => {
-    setPlans(getAllMealPlans())
-  }, [])
+    if (id) {
+      const found = getMealPlanById(id)
+      setDetail(found)
+    } else {
+      setPlans(getAllMealPlans())
+    }
+  }, [id])
 
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = (planId: string, name: string) => {
     if (confirm(`「${name}」を削除しますか？`)) {
-      deleteMealPlan(id)
+      deleteMealPlan(planId)
       setPlans(getAllMealPlans())
     }
   }
 
-  const formatDate = (iso: string) => {
-    const d = new Date(iso)
-    return d.toLocaleDateString('ja-JP', {
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('ja-JP', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     })
+
+  // --- Detail view ---
+  if (id) {
+    if (!detail) {
+      return (
+        <div className="text-center py-12">
+          <div className="text-5xl mb-4">🔍</div>
+          <h2 className="text-xl font-bold text-gray-600 mb-2">献立が見つかりません</h2>
+          <button
+            onClick={() => router.push('/history')}
+            className="bg-orange-500 text-white px-6 py-2 rounded-lg hover:bg-orange-600 mt-4"
+          >
+            履歴に戻る
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <div>
+        <div className="flex justify-between items-center mb-6 no-print">
+          <button
+            onClick={() => router.push('/history')}
+            className="text-orange-600 hover:text-orange-700 font-medium flex items-center gap-1"
+          >
+            ← 履歴一覧に戻る
+          </button>
+          <button
+            onClick={() => window.print()}
+            className="px-4 py-2 rounded-lg font-medium text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors"
+          >
+            🖨️ PDF保存
+          </button>
+        </div>
+        <MealPlanDisplay plan={detail} />
+      </div>
+    )
   }
 
+  // --- List view ---
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -73,7 +120,7 @@ export default function HistoryPage() {
               </div>
               <div className="flex gap-2 ml-4">
                 <button
-                  onClick={() => router.push(`/history/${plan.id}`)}
+                  onClick={() => router.push(`/history?id=${plan.id}`)}
                   className="bg-orange-100 text-orange-700 px-4 py-2 rounded-lg hover:bg-orange-200 font-medium text-sm transition-colors"
                 >
                   📖 見る
@@ -90,5 +137,18 @@ export default function HistoryPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function HistoryPage() {
+  return (
+    <Suspense fallback={
+      <div className="text-center py-12">
+        <div className="text-5xl animate-bounce">📚</div>
+        <p className="text-gray-500 mt-4">読み込み中...</p>
+      </div>
+    }>
+      <HistoryContent />
+    </Suspense>
   )
 }

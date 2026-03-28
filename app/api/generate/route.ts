@@ -9,7 +9,7 @@ export async function POST(req: Request) {
   const { userInput }: { userInput: UserInput } = await req.json()
 
   const client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
+    apiKey: process.env.ANTHROPIC_API_KEY ?? process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY,
   })
 
   const encoder = new TextEncoder()

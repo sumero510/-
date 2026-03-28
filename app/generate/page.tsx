@@ -51,16 +51,34 @@ function GenerateContent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userInput }),
     })
-    if (!response.ok || !response.body) {
-      throw new Error(`サーバーエラー: ${response.status}`)
+
+    // HTTP エラー（400/500 など）は JSON でエラーメッセージが返る
+    if (!response.ok) {
+      let msg = `サーバーエラー: ${response.status}`
+      try {
+        const json = await response.json()
+        if (json.error) msg = json.error
+      } catch { /* ignore */ }
+      throw new Error(msg)
     }
+    if (!response.body) throw new Error('レスポンスが空です')
+
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let fullContent = ''
+
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      fullContent += decoder.decode(value, { stream: true })
+      const chunk = decoder.decode(value, { stream: true })
+
+      // ストリーム中のエラーを検出（null byte + "ERROR:" プレフィックス）
+      if (chunk.includes('\x00ERROR:')) {
+        const errMsg = chunk.replace('\x00ERROR:', '').trim()
+        throw new Error(errMsg)
+      }
+
+      fullContent += chunk
       setContent(fullContent)
     }
     return fullContent
